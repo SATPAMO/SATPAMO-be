@@ -49,3 +49,10 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Agents
+
+.agents/
+.claude/
+.cursor/
+.devin/
