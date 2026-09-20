@@ -1,0 +1,98 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Dosen — Admin/Dosen yang dapat login ke sistem
+// ─────────────────────────────────────────────
+model Dosen {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  email     String   @unique
+  password  String
+  role      Role     @default(DOSEN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("dosens")
+}
+
+enum Role {
+  ADMIN
+  DOSEN
+}
+
+// ─────────────────────────────────────────────
+// Mahasiswa — Data mahasiswa yang dikelola
+// ─────────────────────────────────────────────
+model Mahasiswa {
+  id         String       @id @default(cuid())
+  nim        String       @unique
+  name       String
+  email      String?      @unique
+  password   String       @default("")
+  jurusan    String
+  semester   Int          @default(1)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  attendances Attendance[]
+
+  @@map("mahasiswas")
+}
+
+// ─────────────────────────────────────────────
+// Attendance — Log kehadiran harian
+// ─────────────────────────────────────────────
+model Attendance {
+  id          String           @id @default(cuid())
+  mahasiswaId String
+  date        DateTime         @db.Date
+  checkIn     DateTime?
+  checkOut    DateTime?
+  status          AttendanceStatus @default(ABSENT)
+  notes           String?
+  photo           String?          @db.MediumText
+  latitude        Float?
+  longitude       Float?
+  distance        Float?
+  isLocationValid Boolean          @default(false)
+  aiVerification  Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  mahasiswa Mahasiswa @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([mahasiswaId, date])
+  @@map("attendances")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  IZIN
+}
+
+// ─────────────────────────────────────────────
+// AiReport — Cache hasil analisis Gemini AI
+// ─────────────────────────────────────────────
+model AiReport {
+  id          String   @id @default(cuid())
+  reportType  String
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  prompt      String
+  result      Json
+  generatedAt DateTime @default(now())
+
+  @@map("ai_reports")
+}

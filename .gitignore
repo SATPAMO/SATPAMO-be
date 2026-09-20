@@ -1,0 +1,51 @@
+﻿# ==============================================================================
+# SAMA Backend .gitignore
+# ==============================================================================
+
+# Environment Variables & Secrets
+.env
+.env.*
+*.env
+*.env.*
+*.local
+!.env.example
+!.env.template
+
+# Credentials & Certificates
+*.pem
+*.key
+*.cert
+service-account*.json
+credentials.json
+
+# Dependencies
+node_modules/
+
+# Prisma generated clients
+/generated/prisma/
+generated/
+
+# Uploads & Media Files (Attendance Photos & Student Selfies)
+uploads/
+storage/
+temp/
+tmp/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build Output
+dist/
+build/
+
+# Editor & System Files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
