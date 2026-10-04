@@ -101,6 +101,102 @@ router.post("/register", registerValidation, async (req, res) => {
   }
 });
 
+// ─── POST /api/auth/register-mahasiswa ───────────────────────────────────────
+// Aktivasi akun mahasiswa: validasi NIM & Nama dengan database master
+router.post("/register-mahasiswa", async (req, res) => {
+  const { nim, name, email, password } = req.body;
+
+  if (!nim || !name || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "NIM, Nama Lengkap, dan Password wajib diisi.",
+    });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: "Password minimal 6 karakter.",
+    });
+  }
+
+  try {
+    // 1. Cari mahasiswa berdasarkan NIM
+    const mahasiswa = await prisma.mahasiswa.findUnique({
+      where: { nim: nim.trim() },
+    });
+
+    if (!mahasiswa) {
+      return res.status(404).json({
+        success: false,
+        message: `NIM ${nim} belum terdaftar di database akademik. Silakan hubungi dosen/admin.`,
+      });
+    }
+
+    // 2. Cocokkan nama (case-insensitive & whitespace-trimmed)
+    const nameFromDb = mahasiswa.name.trim().toLowerCase();
+    const nameFromReq = name.trim().toLowerCase();
+    if (nameFromDb !== nameFromReq) {
+      return res.status(400).json({
+        success: false,
+        message: `Nama lengkap tidak sesuai dengan data resmi NIM ${nim}. Harap periksa kembali ejaan nama Anda.`,
+      });
+    }
+
+    // 3. Cek apakah akun sudah aktif
+    if (mahasiswa.password && mahasiswa.password !== "") {
+      return res.status(400).json({
+        success: false,
+        message: "Akun dengan NIM ini sudah pernah diaktivasi. Silakan langsung login.",
+      });
+    }
+
+    // 4. Validasi email jika ada (cek duplikat)
+    if (email) {
+      const emailExists = await prisma.mahasiswa.findFirst({
+        where: { email: email.toLowerCase(), NOT: { nim: nim.trim() } },
+      });
+      if (emailExists) {
+        return res.status(409).json({
+          success: false,
+          message: "Email sudah digunakan oleh mahasiswa lain.",
+        });
+      }
+    }
+
+    // 5. Hash password & aktivasi akun
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    const updatedMahasiswa = await prisma.mahasiswa.update({
+      where: { nim: nim.trim() },
+      data: {
+        password: hashedPassword,
+        ...(email && { email: email.toLowerCase() }),
+      },
+      select: {
+        id: true,
+        nim: true,
+        name: true,
+        email: true,
+        jurusan: true,
+        semester: true,
+        createdAt: true,
+      },
+    });
+
+    const token = signMahasiswaToken(updatedMahasiswa);
+
+    return res.status(200).json({
+      success: true,
+      message: "Akun berhasil diaktivasi. Selamat datang!",
+      data: { mahasiswa: updatedMahasiswa, token },
+    });
+  } catch (err) {
+    console.error("[AUTH] Register-mahasiswa error:", err);
+    return res.status(500).json({ success: false, message: "Terjadi kesalahan server." });
+  }
+});
+
 // ─── POST /api/auth/login ────────────────────────────────────────────────────
 // Login Mahasiswa (mobile): kirim { identifier: email ATAU nim, password }
 // Login Dosen/Admin (web): kirim { email, password }

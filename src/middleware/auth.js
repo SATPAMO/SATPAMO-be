@@ -20,6 +20,7 @@ function authenticate(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.dosen = decoded; // { id, username, email, role }
+    req.user  = decoded; // alias untuk kompatibilitas
     next();
   } catch (err) {
     if (err.name === "TokenExpiredError") {

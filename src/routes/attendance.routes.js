@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const { body, validationResult } = require("express-validator");
 const prisma = require("../lib/prisma");
 const { authenticate } = require("../middleware/auth");
@@ -16,6 +16,8 @@ const checkInValidation = [
   body("latitude").isFloat().withMessage("Latitude harus berupa angka"),
   body("longitude").isFloat().withMessage("Longitude harus berupa angka"),
   body("notes").optional().isString(),
+  body("kelasId").optional().isString(),
+  body("pertemuanKe").optional().isInt(),
 ];
 
 router.post("/check-in", checkInValidation, async (req, res) => {
@@ -24,7 +26,7 @@ router.post("/check-in", checkInValidation, async (req, res) => {
     return res.status(400).json({ success: false, errors: errors.array() });
   }
 
-  const { mahasiswaId, photo, latitude, longitude, notes } = req.body;
+  const { mahasiswaId, photo, latitude, longitude, notes, kelasId, pertemuanKe } = req.body;
 
   try {
     // 1. Cek apakah mahasiswa terdaftar
@@ -79,41 +81,49 @@ router.post("/check-in", checkInValidation, async (req, res) => {
     }
 
     // 6. Simpan atau perbarui record kehadiran
-    const record = await prisma.attendance.upsert({
+    const existing = await prisma.attendance.findFirst({
       where: {
-        mahasiswaId_date: {
-          mahasiswaId,
-          date: todayDate,
-        },
-      },
-      update: {
-        checkIn: now,
-        status,
-        photo,
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        distance: geoResult.distance,
-        isLocationValid: geoResult.isValid,
-        aiVerification: aiResult,
-        notes: noteDetails.join(" | ") || null,
-      },
-      create: {
         mahasiswaId,
         date: todayDate,
-        checkIn: now,
-        status,
-        photo,
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        distance: geoResult.distance,
-        isLocationValid: geoResult.isValid,
-        aiVerification: aiResult,
-        notes: noteDetails.join(" | ") || null,
-      },
-      include: {
-        mahasiswa: { select: { nim: true, name: true, jurusan: true, semester: true } },
+        ...(kelasId ? { kelasId } : { kelasId: null }),
       },
     });
+
+    const attendancePayload = {
+      mahasiswaId,
+      kelasId: kelasId || null,
+      pertemuanKe: pertemuanKe ? parseInt(pertemuanKe) : null,
+      date: todayDate,
+      checkIn: now,
+      status,
+      photo,
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      distance: geoResult.distance,
+      isLocationValid: geoResult.isValid,
+      aiVerification: aiResult,
+      notes: noteDetails.join(" | ") || null,
+    };
+
+    let record;
+    if (existing) {
+      record = await prisma.attendance.update({
+        where: { id: existing.id },
+        data: attendancePayload,
+        include: {
+          mahasiswa: { select: { nim: true, name: true, jurusan: true, semester: true } },
+          kelas: { select: { id: true, kode: true, nama: true } },
+        },
+      });
+    } else {
+      record = await prisma.attendance.create({
+        data: attendancePayload,
+        include: {
+          mahasiswa: { select: { nim: true, name: true, jurusan: true, semester: true } },
+          kelas: { select: { id: true, kode: true, nama: true } },
+        },
+      });
+    }
 
     return res.status(201).json({
       success: true,
@@ -135,11 +145,13 @@ router.post("/check-in", checkInValidation, async (req, res) => {
 // Semua route di bawah ini membutuhkan autentikasi Dosen/Admin
 router.use(authenticate);
 
-// â”€â”€â”€ Helper: format attendance record untuk response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Helper: format attendance record untuk response ──────────────────────────
 function formatRecord(record) {
   return {
     id: record.id,
     mahasiswaId: record.mahasiswaId,
+    kelasId: record.kelasId || null,
+    kelas: record.kelas ? { id: record.kelas.id, kode: record.kelas.kode, nama: record.kelas.nama } : null,
     nim: record.mahasiswa?.nim,
     name: record.mahasiswa?.name,
     jurusan: record.mahasiswa?.jurusan,
@@ -148,6 +160,7 @@ function formatRecord(record) {
     checkIn: record.checkIn,
     checkOut: record.checkOut,
     status: record.status,
+    pertemuanKe: record.pertemuanKe || null,
     notes: record.notes,
     photo: record.photo,
     latitude: record.latitude,
@@ -201,10 +214,10 @@ router.get("/stats", async (req, res) => {
   }
 });
 
-// â”€â”€â”€ GET /api/attendance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Query: ?date=2026-09-07&startDate=...&endDate=...&status=PRESENT&search=budi
+// ─── GET /api/attendance ───────────────────────────────────────────────────────
+// Query: ?date=2026-09-07&startDate=...&endDate=...&status=PRESENT&search=budi&kelasId=...
 router.get("/", async (req, res) => {
-  const { date, startDate, endDate, status, search, page = 1, limit = 50 } = req.query;
+  const { date, startDate, endDate, status, search, kelasId, page = 1, limit = 50 } = req.query;
 
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -231,34 +244,35 @@ router.get("/", async (req, res) => {
   }
 
   try {
+    const where = {
+      ...dateFilter,
+      ...(status ? { status } : {}),
+      ...(kelasId && kelasId !== "undefined" ? { kelasId } : {}),
+      ...(cleanSearch
+        ? {
+            mahasiswa: {
+              OR: [
+                { name: { contains: cleanSearch } },
+                { nim: { contains: cleanSearch } },
+              ],
+            },
+          }
+        : {}),
+    };
+
     const [records, total] = await Promise.all([
       prisma.attendance.findMany({
-        where: {
-          ...dateFilter,
-          ...(status ? { status } : {}),
-          ...(cleanSearch
-            ? {
-                mahasiswa: {
-                  OR: [
-                    { name: { contains: cleanSearch } },
-                    { nim: { contains: cleanSearch } },
-                  ],
-                },
-              }
-            : {}),
-        },
+        where,
         include: {
           mahasiswa: { select: { nim: true, name: true, jurusan: true, semester: true } },
+          kelas: { select: { id: true, kode: true, nama: true } },
         },
         orderBy: [{ date: "desc" }, { checkIn: "desc" }, { createdAt: "desc" }],
         skip,
         take: parseInt(limit),
       }),
       prisma.attendance.count({
-        where: {
-          ...dateFilter,
-          ...(status ? { status } : {}),
-        },
+        where,
       }),
     ]);
 
@@ -376,4 +390,232 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ABSENSI BERBASIS KELAS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── GET /api/attendance/kelas/:kelasId ───────────────────────────────────────
+// Dosen melihat daftar seluruh mahasiswa di kelas beserta status absensi untuk tanggal/pertemuan
+router.get("/kelas/:kelasId", async (req, res) => {
+  const { kelasId } = req.params;
+  const { date, pertemuanKe } = req.query;
+
+  try {
+    const kelas = await prisma.kelas.findUnique({
+      where: { id: kelasId },
+      include: {
+        dosen: { select: { id: true, username: true, email: true } },
+        jadwals: true,
+      },
+    });
+
+    if (!kelas) {
+      return res.status(404).json({ success: false, message: "Kelas tidak ditemukan." });
+    }
+
+    if (req.user.role !== "ADMIN" && kelas.dosenId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Anda tidak memiliki hak akses ke kelas ini." });
+    }
+
+    // Tentukan tanggal target (WIB)
+    const todayWIB = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+    const targetDateStr = date && date !== "undefined" ? date : todayWIB;
+    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+
+    // 1. Ambil semua mahasiswa yang terdaftar di kelas
+    const enrolledMembers = await prisma.kelasMahasiswa.findMany({
+      where: { kelasId },
+      include: {
+        mahasiswa: {
+          select: {
+            id: true,
+            nim: true,
+            name: true,
+            email: true,
+            jurusan: true,
+            semester: true,
+          },
+        },
+      },
+      orderBy: { mahasiswa: { name: "asc" } },
+    });
+
+    // 2. Ambil catatan kehadiran untuk kelas dan tanggal (atau pertemuanKe)
+    const attendanceFilter = {
+      kelasId,
+      ...(pertemuanKe ? { pertemuanKe: parseInt(pertemuanKe) } : { date: targetDate }),
+    };
+
+    const attendances = await prisma.attendance.findMany({
+      where: attendanceFilter,
+    });
+
+    const attendanceMap = new Map();
+    attendances.forEach((att) => {
+      attendanceMap.set(att.mahasiswaId, att);
+    });
+
+    // 3. Gabungkan seluruh anggota dengan catatan kehadirannya
+    const roster = enrolledMembers.map((em) => {
+      const att = attendanceMap.get(em.mahasiswa.id);
+      return {
+        mahasiswaId: em.mahasiswa.id,
+        nim: em.mahasiswa.nim,
+        name: em.mahasiswa.name,
+        jurusan: em.mahasiswa.jurusan,
+        semester: em.mahasiswa.semester,
+        attendanceId: att ? att.id : null,
+        status: att ? att.status : "NOT_RECORDED",
+        checkIn: att ? att.checkIn : null,
+        checkOut: att ? att.checkOut : null,
+        notes: att ? att.notes : null,
+        photo: att ? att.photo : null,
+        latitude: att ? att.latitude : null,
+        longitude: att ? att.longitude : null,
+        distance: att ? att.distance : null,
+        isLocationValid: att ? att.isLocationValid : false,
+        pertemuanKe: att ? att.pertemuanKe : (pertemuanKe ? parseInt(pertemuanKe) : null),
+      };
+    });
+
+    const stats = {
+      totalEnrolled: roster.length,
+      present: roster.filter((r) => r.status === "PRESENT").length,
+      late: roster.filter((r) => r.status === "LATE").length,
+      absent: roster.filter((r) => r.status === "ABSENT").length,
+      izin: roster.filter((r) => r.status === "IZIN").length,
+      sakit: roster.filter((r) => r.status === "SAKIT").length,
+      notRecorded: roster.filter((r) => r.status === "NOT_RECORDED").length,
+    };
+
+    return res.json({
+      success: true,
+      kelas: {
+        id: kelas.id,
+        kode: kelas.kode,
+        nama: kelas.nama,
+        dosen: kelas.dosen,
+        jadwals: kelas.jadwals,
+      },
+      filter: {
+        date: targetDateStr,
+        pertemuanKe: pertemuanKe ? parseInt(pertemuanKe) : null,
+      },
+      stats,
+      students: roster,
+      data: roster,
+    });
+  } catch (err) {
+    console.error("[ATTENDANCE] GET /kelas/:kelasId error:", err);
+    return res.status(500).json({ success: false, message: "Gagal memuat absensi kelas: " + err.message });
+  }
+});
+
+// ─── POST /api/attendance/kelas/:kelasId/record ───────────────────────────────
+// Dosen mencatat / mengupdate absensi mahasiswa di kelas (mendukung input batch satu kelas)
+router.post("/kelas/:kelasId/record", async (req, res) => {
+  const { kelasId } = req.params;
+  const { date, pertemuanKe, records, mahasiswaId, status, notes } = req.body;
+
+  try {
+    const kelas = await prisma.kelas.findUnique({
+      where: { id: kelasId },
+    });
+
+    if (!kelas) {
+      return res.status(404).json({ success: false, message: "Kelas tidak ditemukan." });
+    }
+
+    if (req.user.role !== "ADMIN" && kelas.dosenId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Anda tidak memiliki hak akses ke kelas ini." });
+    }
+
+    const todayWIB = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+    const targetDateStr = date && date !== "undefined" ? date : todayWIB;
+    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetPertemuan = pertemuanKe ? parseInt(pertemuanKe) : null;
+
+    let itemsToProcess = [];
+    if (Array.isArray(records) && records.length > 0) {
+      itemsToProcess = records;
+    } else if (mahasiswaId && status) {
+      itemsToProcess = [{ mahasiswaId, status, notes }];
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Wajib mengirimkan array 'records' atau pasangan 'mahasiswaId' & 'status'.",
+      });
+    }
+
+    const validStatuses = ["PRESENT", "LATE", "ABSENT", "IZIN", "SAKIT"];
+    const now = new Date();
+    const results = [];
+
+    for (const item of itemsToProcess) {
+      if (!item.mahasiswaId) continue;
+      const attStatus = validStatuses.includes(item.status) ? item.status : "PRESENT";
+
+      const existing = await prisma.attendance.findFirst({
+        where: {
+          mahasiswaId: item.mahasiswaId,
+          kelasId,
+          ...(targetPertemuan !== null ? { pertemuanKe: targetPertemuan } : { date: targetDate }),
+        },
+      });
+
+      if (existing) {
+        const updated = await prisma.attendance.update({
+          where: { id: existing.id },
+          data: {
+            status: attStatus,
+            pertemuanKe: targetPertemuan !== null ? targetPertemuan : existing.pertemuanKe,
+            date: targetDate,
+            checkIn: attStatus === "PRESENT" || attStatus === "LATE" ? (existing.checkIn || now) : null,
+            notes: item.notes !== undefined ? item.notes : existing.notes,
+          },
+          include: {
+            mahasiswa: { select: { nim: true, name: true } },
+          },
+        });
+        results.push(updated);
+      } else {
+        const created = await prisma.attendance.create({
+          data: {
+            mahasiswaId: item.mahasiswaId,
+            kelasId,
+            pertemuanKe: targetPertemuan,
+            date: targetDate,
+            status: attStatus,
+            checkIn: attStatus === "PRESENT" || attStatus === "LATE" ? now : null,
+            notes: item.notes || null,
+          },
+          include: {
+            mahasiswa: { select: { nim: true, name: true } },
+          },
+        });
+        results.push(created);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Berhasil mencatat absensi ${results.length} mahasiswa untuk kelas ${kelas.nama}.`,
+      totalProcessed: results.length,
+      data: results.map((r) => ({
+        id: r.id,
+        mahasiswaId: r.mahasiswaId,
+        nim: r.mahasiswa?.nim,
+        name: r.mahasiswa?.name,
+        status: r.status,
+        pertemuanKe: r.pertemuanKe,
+        notes: r.notes,
+      })),
+    });
+  } catch (err) {
+    console.error("[ATTENDANCE] POST /kelas/:kelasId/record error:", err);
+    return res.status(500).json({ success: false, message: "Gagal mencatat absensi kelas: " + err.message });
+  }
+});
+
 module.exports = router;
+

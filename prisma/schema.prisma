@@ -22,6 +22,8 @@ model Dosen {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  kelas     Kelas[]
+
   @@map("dosens")
 }
 
@@ -34,31 +36,98 @@ enum Role {
 // Mahasiswa — Data mahasiswa yang dikelola
 // ─────────────────────────────────────────────
 model Mahasiswa {
-  id         String       @id @default(cuid())
-  nim        String       @unique
+  id         String           @id @default(cuid())
+  nim        String           @unique
   name       String
-  email      String?      @unique
-  password   String       @default("")
+  email      String?          @unique
+  password   String           @default("")
   jurusan    String
-  semester   Int          @default(1)
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+  semester   Int              @default(1)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
 
-  attendances Attendance[]
+  attendances     Attendance[]
+  kelasMahasiswas KelasMahasiswa[]
 
   @@map("mahasiswas")
 }
 
 // ─────────────────────────────────────────────
-// Attendance — Log kehadiran harian
+// Kelas — Mata Kuliah / Kelas yang diampu Dosen
+// ─────────────────────────────────────────────
+model Kelas {
+  id          String           @id @default(cuid())
+  kode        String           @unique
+  nama        String
+  deskripsi   String?
+  dosenId     String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  dosen       Dosen            @relation(fields: [dosenId], references: [id], onDelete: Cascade)
+  jadwals     JadwalKelas[]
+  mahasiswas  KelasMahasiswa[]
+  attendances Attendance[]
+
+  @@map("kelas")
+}
+
+// ─────────────────────────────────────────────
+// JadwalKelas — Jadwal perkuliahan per kelas
+// ─────────────────────────────────────────────
+model JadwalKelas {
+  id         String   @id @default(cuid())
+  kelasId    String
+  hari       Hari
+  jamMulai   String   // format "08:00"
+  jamSelesai String   // format "10:30"
+  ruangan    String?  // contoh: "Lab Komputer 1", "Gedung A 302"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  kelas      Kelas    @relation(fields: [kelasId], references: [id], onDelete: Cascade)
+
+  @@map("jadwal_kelas")
+}
+
+enum Hari {
+  SENIN
+  SELASA
+  RABU
+  KAMIS
+  JUMAT
+  SABTU
+  MINGGU
+}
+
+// ─────────────────────────────────────────────
+// KelasMahasiswa — Mahasiswa yang terdaftar di kelas (Enrollment)
+// ─────────────────────────────────────────────
+model KelasMahasiswa {
+  id          String    @id @default(cuid())
+  kelasId     String
+  mahasiswaId String
+  enrolledAt  DateTime  @default(now())
+
+  kelas       Kelas     @relation(fields: [kelasId], references: [id], onDelete: Cascade)
+  mahasiswa   Mahasiswa @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([kelasId, mahasiswaId])
+  @@map("kelas_mahasiswa")
+}
+
+// ─────────────────────────────────────────────
+// Attendance — Log kehadiran harian & per kelas
 // ─────────────────────────────────────────────
 model Attendance {
-  id          String           @id @default(cuid())
-  mahasiswaId String
-  date        DateTime         @db.Date
-  checkIn     DateTime?
-  checkOut    DateTime?
+  id              String           @id @default(cuid())
+  mahasiswaId     String
+  kelasId         String?
+  date            DateTime         @db.Date
+  checkIn         DateTime?
+  checkOut        DateTime?
   status          AttendanceStatus @default(ABSENT)
+  pertemuanKe     Int?
   notes           String?
   photo           String?          @db.MediumText
   latitude        Float?
@@ -69,9 +138,11 @@ model Attendance {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
-  mahasiswa Mahasiswa @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+  mahasiswa       Mahasiswa        @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+  kelas           Kelas?           @relation(fields: [kelasId], references: [id], onDelete: SetNull)
 
-  @@unique([mahasiswaId, date])
+  @@index([mahasiswaId, date])
+  @@index([kelasId, date])
   @@map("attendances")
 }
 
@@ -80,6 +151,7 @@ enum AttendanceStatus {
   LATE
   ABSENT
   IZIN
+  SAKIT
 }
 
 // ─────────────────────────────────────────────

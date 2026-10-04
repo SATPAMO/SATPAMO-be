@@ -126,7 +126,107 @@ async function main() {
     }
   }
 
-  console.log(`✅ ${attendanceCount} record kehadiran berhasil dibuat (7 hari terakhir)\n`);
+  console.log(`✅ ${attendanceCount} record kehadiran umum berhasil dibuat (7 hari terakhir)\n`);
+
+  // ─── 4. Buat data Kelas dan Jadwal untuk Dosen ──────────────────────────────
+  const kelasWeb = await prisma.kelas.upsert({
+    where: { kode: "TIF-301" },
+    update: {
+      nama: "Pemrograman Web Lanjut",
+      dosenId: dosen1.id,
+    },
+    create: {
+      kode: "TIF-301",
+      nama: "Pemrograman Web Lanjut",
+      deskripsi: "Mata kuliah pengembangan web modern menggunakan Node.js, Express, dan React.",
+      dosenId: dosen1.id,
+    },
+  });
+
+  const kelasStrukdat = await prisma.kelas.upsert({
+    where: { kode: "TIF-201" },
+    update: {
+      nama: "Struktur Data & Algoritma",
+      dosenId: dosen1.id,
+    },
+    create: {
+      kode: "TIF-201",
+      nama: "Struktur Data & Algoritma",
+      deskripsi: "Mata kuliah konsep struktur data, binary tree, graph, dan optimasi algoritma.",
+      dosenId: dosen1.id,
+    },
+  });
+
+  // Hapus jadwal lama lalu buat jadwal baru
+  await prisma.jadwalKelas.deleteMany({
+    where: { kelasId: { in: [kelasWeb.id, kelasStrukdat.id] } },
+  });
+
+  await prisma.jadwalKelas.createMany({
+    data: [
+      {
+        kelasId: kelasWeb.id,
+        hari: "SENIN",
+        jamMulai: "08:00",
+        jamSelesai: "10:30",
+        ruangan: "Lab Komputer 1",
+      },
+      {
+        kelasId: kelasWeb.id,
+        hari: "KAMIS",
+        jamMulai: "10:00",
+        jamSelesai: "12:00",
+        ruangan: "Lab Komputer 2",
+      },
+      {
+        kelasId: kelasStrukdat.id,
+        hari: "RABU",
+        jamMulai: "13:00",
+        jamSelesai: "15:30",
+        ruangan: "Gedung B Ruang 204",
+      },
+    ],
+  });
+  console.log("✅ 2 Kelas & 3 Jadwal perkuliahan berhasil dibuat untuk Dosen Budi Santoso");
+
+  // ─── 5. Daftarkan Mahasiswa ke Kelas (Enrollment) ───────────────────────────
+  await prisma.kelasMahasiswa.deleteMany({
+    where: { kelasId: { in: [kelasWeb.id, kelasStrukdat.id] } },
+  });
+
+  // Daftarkan 6 mahasiswa pertama ke kelas Web, dan 6 mahasiswa berikutnya ke kelas Strukdat
+  const webStudents = mahasiswas.slice(0, 7);
+  const strukdatStudents = mahasiswas.slice(4, 11);
+
+  await prisma.kelasMahasiswa.createMany({
+    data: [
+      ...webStudents.map((m) => ({ kelasId: kelasWeb.id, mahasiswaId: m.id })),
+      ...strukdatStudents.map((m) => ({ kelasId: kelasStrukdat.id, mahasiswaId: m.id })),
+    ],
+    skipDuplicates: true,
+  });
+  console.log(`✅ ${webStudents.length} mhs terdaftar di Kelas Web, ${strukdatStudents.length} mhs di Kelas Strukdat`);
+
+  // ─── 6. Buat Absensi Kelas Contoh untuk Hari Ini ────────────────────────────
+  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+  const todayDateObj = new Date(`${todayStr}T00:00:00.000Z`);
+
+  for (const mhs of webStudents) {
+    const isPresent = Math.random() > 0.2;
+    await prisma.attendance.create({
+      data: {
+        mahasiswaId: mhs.id,
+        kelasId: kelasWeb.id,
+        date: todayDateObj,
+        pertemuanKe: 1,
+        status: isPresent ? "PRESENT" : "ABSENT",
+        checkIn: isPresent ? new Date() : null,
+        notes: isPresent ? "Hadir tepat waktu di kelas" : "Tidak ada keterangan",
+      },
+    });
+  }
+  console.log("✅ Absensi kelas contoh pertemuan ke-1 berhasil dicatat\n");
+
   console.log("🎉 Seeding selesai!\n");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("   Login sebagai Admin: admin@sama.ac.id / admin123");

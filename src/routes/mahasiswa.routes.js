@@ -20,6 +20,66 @@ router.get("/public", async (_req, res) => {
   }
 });
 
+// ─── POST /api/mahasiswa/import-csv ──────────────────────────────────────────
+// Import daftar mahasiswa dari CSV ke database master (upsert)
+// Body: { students: [{ nim, name, email?, jurusan, semester }] }
+router.post("/import-csv", authenticate, async (req, res) => {
+  const { students } = req.body;
+
+  if (!Array.isArray(students) || students.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Data students harus berupa array dan tidak boleh kosong.",
+    });
+  }
+
+  const results = { inserted: 0, updated: 0, errors: [] };
+
+  for (const s of students) {
+    const nim = String(s.nim || "").trim();
+    const name = String(s.name || s.nama || "").trim();
+    const jurusan = String(s.jurusan || "").trim();
+    const semester = parseInt(s.semester) || 1;
+    const email = s.email ? String(s.email).trim().toLowerCase() : null;
+
+    if (!nim || !name || !jurusan) {
+      results.errors.push({ nim, reason: "NIM, Nama, dan Jurusan wajib diisi." });
+      continue;
+    }
+
+    try {
+      const existing = await prisma.mahasiswa.findUnique({ where: { nim } });
+
+      if (existing) {
+        // Update data tapi jangan timpa password yang sudah ada
+        await prisma.mahasiswa.update({
+          where: { nim },
+          data: {
+            name,
+            jurusan,
+            semester,
+            ...(email && email !== existing.email ? { email } : {}),
+          },
+        });
+        results.updated++;
+      } else {
+        await prisma.mahasiswa.create({
+          data: { nim, name, email, jurusan, semester, password: "" },
+        });
+        results.inserted++;
+      }
+    } catch (err) {
+      results.errors.push({ nim, reason: err.message });
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: `Import selesai. ${results.inserted} data baru, ${results.updated} data diperbarui, ${results.errors.length} gagal.`,
+    data: results,
+  });
+});
+
 // Semua route di bawah ini membutuhkan autentikasi
 router.use(authenticate);
 
