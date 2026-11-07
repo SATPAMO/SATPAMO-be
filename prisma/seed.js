@@ -41,37 +41,49 @@ async function main() {
   // ─── 2. Buat data Mahasiswa ───────────────────────────────────────────────
   const mahasiswaPassword = "mahasiswa123";
   const mahasiswaHashedPassword = await bcrypt.hash(mahasiswaPassword, 12);
+  const gawPassword = "gaw123";
+  const gawHashedPassword = await bcrypt.hash(gawPassword, 12);
+
+  // Bersihkan data mahasiswa lama & relasinya agar sinkron dengan NIM 15 digit
+  await prisma.attendance.deleteMany();
+  await prisma.kelasMahasiswa.deleteMany();
+  await prisma.mahasiswa.deleteMany();
+  console.log("🧹 Data mahasiswa & kehadiran lama dibersihkan");
 
   const mahasiswaData = [
-    { nim: "2021001001", name: "Ahmad Rizki Pratama",    email: "ahmad.rizki@mhs.sama.ac.id",    jurusan: "Teknik Informatika", semester: 7, password: mahasiswaHashedPassword },
-    { nim: "2021001002", name: "Siti Nurhaliza",         email: "siti.nurhaliza@mhs.sama.ac.id", jurusan: "Teknik Informatika", semester: 7, password: mahasiswaHashedPassword },
-    { nim: "2021001003", name: "Budi Cahyono",           email: "budi.cahyono@mhs.sama.ac.id",   jurusan: "Teknik Informatika", semester: 7, password: mahasiswaHashedPassword },
-    { nim: "2021001004", name: "Dewi Rahayu",            email: "dewi.rahayu@mhs.sama.ac.id",    jurusan: "Teknik Informatika", semester: 7, password: mahasiswaHashedPassword },
-    { nim: "2021001005", name: "Eko Prasetyo",           email: "eko.prasetyo@mhs.sama.ac.id",   jurusan: "Teknik Informatika", semester: 7, password: mahasiswaHashedPassword },
-    { nim: "2022002001", name: "Fatimah Zahra",          email: "fatimah.zahra@mhs.sama.ac.id",  jurusan: "Sistem Informasi",   semester: 5, password: mahasiswaHashedPassword },
-    { nim: "2022002002", name: "Gilang Ramadhan",        email: "gilang.r@mhs.sama.ac.id",       jurusan: "Sistem Informasi",   semester: 5, password: mahasiswaHashedPassword },
-    { nim: "2022002003", name: "Hana Pertiwi",           email: "hana.p@mhs.sama.ac.id",         jurusan: "Sistem Informasi",   semester: 5, password: mahasiswaHashedPassword },
-    { nim: "2022002004", name: "Irfan Hakim",            email: "irfan.h@mhs.sama.ac.id",        jurusan: "Sistem Informasi",   semester: 5, password: mahasiswaHashedPassword },
-    { nim: "2023003001", name: "Jasmine Aulia",          email: "jasmine.a@mhs.sama.ac.id",      jurusan: "Teknik Elektro",     semester: 3, password: mahasiswaHashedPassword },
-    { nim: "2023003002", name: "Kevin Surya",            email: "kevin.s@mhs.sama.ac.id",        jurusan: "Teknik Elektro",     semester: 3, password: mahasiswaHashedPassword },
-    { nim: "2023003003", name: "Lestari Wulandari",      email: "lestari.w@mhs.sama.ac.id",      jurusan: "Teknik Elektro",     semester: 3, password: mahasiswaHashedPassword },
+    { nim: "213140701111001", name: "Ahmad Rizki Pratama",    email: "ahmad.rizki@mhs.sama.ac.id",    jurusan: "Teknik Informatika",  semester: 7, password: mahasiswaHashedPassword },
+    { nim: "213140701111002", name: "Siti Nurhaliza",         email: "siti.nurhaliza@mhs.sama.ac.id", jurusan: "Teknik Informatika",  semester: 7, password: mahasiswaHashedPassword },
+    { nim: "213140701111003", name: "Budi Cahyono",           email: "budi.cahyono@mhs.sama.ac.id",   jurusan: "Teknik Informatika",  semester: 7, password: mahasiswaHashedPassword },
+    { nim: "213140701111004", name: "Dewi Rahayu",            email: "dewi.rahayu@mhs.sama.ac.id",    jurusan: "Teknik Informatika",  semester: 7, password: mahasiswaHashedPassword },
+    { nim: "213140701111005", name: "Eko Prasetyo",           email: "eko.prasetyo@mhs.sama.ac.id",   jurusan: "Teknik Informatika",  semester: 7, password: mahasiswaHashedPassword },
+    { nim: "223140701111001", name: "Fatimah Zahra",          email: "fatimah.zahra@mhs.sama.ac.id",  jurusan: "Sistem Informasi",    semester: 5, password: mahasiswaHashedPassword },
+    { nim: "223140701111002", name: "Gilang Ramadhan",        email: "gilang.r@mhs.sama.ac.id",       jurusan: "Sistem Informasi",    semester: 5, password: mahasiswaHashedPassword },
+    { nim: "223140701111003", name: "Hana Pertiwi",           email: "hana.p@mhs.sama.ac.id",         jurusan: "Sistem Informasi",    semester: 5, password: mahasiswaHashedPassword },
+    { nim: "223140701111004", name: "Irfan Hakim",            email: "irfan.h@mhs.sama.ac.id",        jurusan: "Sistem Informasi",    semester: 5, password: mahasiswaHashedPassword },
+    { nim: "233140701111001", name: "Jasmine Aulia",          email: "jasmine.a@mhs.sama.ac.id",      jurusan: "Teknik Elektro",      semester: 3, password: mahasiswaHashedPassword },
+    { nim: "233140701111002", name: "Kevin Surya",            email: "kevin.s@mhs.sama.ac.id",        jurusan: "Teknik Elektro",      semester: 3, password: mahasiswaHashedPassword },
+    { nim: "233140701111003", name: "Lestari Wulandari",      email: "lestari.w@mhs.sama.ac.id",      jurusan: "Teknik Elektro",      semester: 3, password: mahasiswaHashedPassword },
+    { nim: "253140701111002", name: "Ghaura Furqon Nugraha",  email: "gaw@mhs.satpamo.ac.id",         jurusan: "Teknologi Informasi", semester: 3, password: gawHashedPassword },
   ];
 
   const mahasiswas = [];
   for (const data of mahasiswaData) {
     const mhs = await prisma.mahasiswa.upsert({
       where: { nim: data.nim },
-      update: { password: mahasiswaHashedPassword },
+      update: {
+        name: data.name,
+        email: data.email,
+        jurusan: data.jurusan,
+        semester: data.semester,
+        password: data.password,
+      },
       create: data,
     });
     mahasiswas.push(mhs);
   }
-  console.log(`✅ ${mahasiswas.length} mahasiswa berhasil dibuat (password: ${mahasiswaPassword})`);
+  console.log(`✅ ${mahasiswas.length} mahasiswa berhasil dibuat (NIM 15 digit)`);
 
   // ─── 3. Buat data Kehadiran 7 hari terakhir ────────────────────────────────
-  await prisma.attendance.deleteMany();
-  console.log("🧹 Data kehadiran lama dibersihkan");
-
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -194,9 +206,10 @@ async function main() {
     where: { kelasId: { in: [kelasWeb.id, kelasStrukdat.id] } },
   });
 
-  // Daftarkan 6 mahasiswa pertama ke kelas Web, dan 6 mahasiswa berikutnya ke kelas Strukdat
-  const webStudents = mahasiswas.slice(0, 7);
-  const strukdatStudents = mahasiswas.slice(4, 11);
+  // Daftarkan mahasiswa ke kelas (termasuk Ghaura di kedua kelas)
+  const ghauraMhs = mahasiswas.find((m) => m.nim === "253140701111002");
+  const webStudents = [...mahasiswas.slice(0, 7), ...(ghauraMhs ? [ghauraMhs] : [])];
+  const strukdatStudents = [...mahasiswas.slice(4, 11), ...(ghauraMhs ? [ghauraMhs] : [])];
 
   await prisma.kelasMahasiswa.createMany({
     data: [
@@ -231,8 +244,9 @@ async function main() {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("   Login sebagai Admin: admin@sama.ac.id / admin123");
   console.log("   Login sebagai Dosen: budi.santoso@sama.ac.id / dosen123");
-  console.log(`   Login Mahasiswa (mobile): email/NIM / ${mahasiswaPassword}`);
-  console.log("   Contoh: 2021001001 / mahasiswa123");
+  console.log(`   Login Mahasiswa (umum): email/NIM / ${mahasiswaPassword}`);
+  console.log("   Contoh NIM umum: 213140701111001 / mahasiswa123");
+  console.log("   Akun Ghaura: 253140701111002 / gaw123");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
 

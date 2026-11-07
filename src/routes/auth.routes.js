@@ -209,56 +209,61 @@ router.post("/login", loginValidation, async (req, res) => {
   const { identifier, email, password } = req.body;
 
   try {
-    // Login Mahasiswa
-    if (identifier) {
+    const loginKey = (identifier || email || "").trim();
+
+    // 1. Cek Mahasiswa terlebih dahulu (bisa via NIM atau Email)
+    if (loginKey) {
       const mahasiswa = await prisma.mahasiswa.findFirst({
         where: {
           OR: [
-            { email: identifier.toLowerCase() },
-            { nim: identifier.toLowerCase() },
+            { email: loginKey.toLowerCase() },
+            { nim: loginKey },
           ],
         },
       });
 
-      if (!mahasiswa || !mahasiswa.password) {
-        return res.status(401).json({ success: false, message: "Email/NIM atau password salah." });
+      if (mahasiswa && mahasiswa.password) {
+        const passwordMatch = await bcrypt.compare(password, mahasiswa.password);
+        if (passwordMatch) {
+          const token = signMahasiswaToken(mahasiswa);
+          const { password: _, ...mahasiswaSafe } = mahasiswa;
+
+          return res.json({
+            success: true,
+            message: "Login berhasil.",
+            data: { mahasiswa: mahasiswaSafe, token },
+          });
+        } else {
+          return res.status(401).json({ success: false, message: "NIM/Email atau password salah." });
+        }
       }
-
-      const passwordMatch = await bcrypt.compare(password, mahasiswa.password);
-      if (!passwordMatch) {
-        return res.status(401).json({ success: false, message: "Email/NIM atau password salah." });
-      }
-
-      const token = signMahasiswaToken(mahasiswa);
-      const { password: _, ...mahasiswaSafe } = mahasiswa;
-
-      return res.json({
-        success: true,
-        message: "Login berhasil.",
-        data: { mahasiswa: mahasiswaSafe, token },
-      });
     }
 
-    // Login Dosen/Admin
-    const dosen = await prisma.dosen.findUnique({ where: { email } });
-
-    if (!dosen) {
-      return res.status(401).json({ success: false, message: "Email atau password salah." });
-    }
-
-    const passwordMatch = await bcrypt.compare(password, dosen.password);
-    if (!passwordMatch) {
-      return res.status(401).json({ success: false, message: "Email atau password salah." });
-    }
-
-    const token = signToken(dosen);
-    const { password: _, ...dosenSafe } = dosen;
-
-    return res.json({
-      success: true,
-      message: "Login berhasil.",
-      data: { dosen: dosenSafe, token },
+    // 2. Cek Dosen/Admin jika bukan mahasiswa (via Email atau Username)
+    const dosen = await prisma.dosen.findFirst({
+      where: {
+        OR: [
+          { email: loginKey.toLowerCase() },
+          { username: loginKey },
+        ],
+      },
     });
+
+    if (dosen && dosen.password) {
+      const passwordMatch = await bcrypt.compare(password, dosen.password);
+      if (passwordMatch) {
+        const token = signToken(dosen);
+        const { password: _, ...dosenSafe } = dosen;
+
+        return res.json({
+          success: true,
+          message: "Login berhasil.",
+          data: { dosen: dosenSafe, token },
+        });
+      }
+    }
+
+    return res.status(401).json({ success: false, message: "NIM/Email atau password salah." });
   } catch (err) {
     console.error("[AUTH] Login error:", err);
     return res.status(500).json({ success: false, message: "Terjadi kesalahan server." });
