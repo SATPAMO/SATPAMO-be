@@ -1,7 +1,19 @@
 const express = require("express");
+const multer = require("multer");
 const { body, param, validationResult } = require("express-validator");
 const prisma = require("../lib/prisma");
 const { authenticate } = require("../middleware/auth");
+const {
+  VALID_HARI,
+  parseCsvString,
+  parseExcelBuffer,
+  checkScheduleConflict,
+} = require("../lib/scheduleValidator");
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // max 10MB
+});
 
 const router = express.Router();
 
@@ -240,6 +252,310 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// ─── POST /api/kelas/import-csv & /api/kelas/import-file ─────────────────────
+// Dosen mengimpor file Excel (.xlsx / .xls) atau CSV yang berisi kelas, jadwal perkuliahan, dan mahasiswa
+// Menerima file upload (multipart/form-data: field 'file') ATAU JSON ({ csv: '...' } / { rows: [...] })
+router.post(["/import-csv", "/import-file"], upload.single("file"), async (req, res) => {
+  // Hanya role DOSEN atau ADMIN yang dapat mengimpor kelas
+  if (req.user.role === "MAHASISWA") {
+    return res.status(403).json({
+      success: false,
+      message: "Akses ditolak. Hanya Dosen atau Admin yang dapat mengimpor kelas.",
+    });
+  }
+
+  let rawRows = [];
+
+  // 1. Ekstrak baris data dari file upload (Excel / CSV) atau JSON body
+  if (req.file) {
+    const originalName = (req.file.originalname || "").toLowerCase();
+    const isExcel =
+      originalName.endsWith(".xlsx") ||
+      originalName.endsWith(".xls") ||
+      req.file.mimetype.includes("sheet") ||
+      req.file.mimetype.includes("excel");
+
+    if (isExcel) {
+      rawRows = parseExcelBuffer(req.file.buffer);
+    } else {
+      rawRows = parseCsvString(req.file.buffer.toString("utf-8"));
+    }
+  } else if (typeof req.body?.csv === "string") {
+    rawRows = parseCsvString(req.body.csv);
+  } else if (Array.isArray(req.body?.rows)) {
+    rawRows = req.body.rows;
+  } else if (Array.isArray(req.body)) {
+    rawRows = req.body;
+  }
+
+  if (!rawRows || rawRows.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Data kosong atau format tidak dikenali. Unggah file .xlsx / .csv dengan field 'file' atau kirim JSON { rows: [...] }.",
+    });
+  }
+
+  const targetDosenId =
+    req.user.role === "ADMIN" && req.body.dosenId ? req.body.dosenId : req.user.id;
+
+  try {
+    // 1. Kelompokkan baris berdasarkan kode_kelas
+    const classGroups = new Map();
+
+    for (const row of rawRows) {
+      const kodeKelas = String(
+        row.kode_kelas || row.kode || row.kodekelas || row.class_code || ""
+      ).trim();
+      if (!kodeKelas) continue;
+
+      if (!classGroups.has(kodeKelas)) {
+        classGroups.set(kodeKelas, {
+          kode: kodeKelas,
+          nama: String(
+            row.nama_kelas ||
+              row.nama ||
+              row.matakuliah ||
+              row.mata_kuliah ||
+              row.namakelas ||
+              row.class_name ||
+              kodeKelas
+          ).trim(),
+          deskripsi: row.deskripsi ? String(row.deskripsi).trim() : null,
+          jadwals: [],
+          students: [],
+        });
+      }
+
+      const group = classGroups.get(kodeKelas);
+
+      // Ekstrak info jadwal
+      const hari = String(row.hari || row.day || "").trim();
+      const jamMulai = String(
+        row.jam_mulai || row.jammulai || row.jam_masuk || row.start_time || ""
+      ).trim();
+      const jamSelesai = String(
+        row.jam_selesai || row.jamselesai || row.jam_keluar || row.end_time || ""
+      ).trim();
+      const ruangan = String(row.ruangan || row.ruang || row.room || "").trim();
+
+      if (hari && jamMulai && jamSelesai) {
+        const isDupSchedule = group.jadwals.some(
+          (j) =>
+            j.hari.toUpperCase() === hari.toUpperCase() &&
+            j.jamMulai === jamMulai &&
+            j.jamSelesai === jamSelesai &&
+            j.ruangan === ruangan
+        );
+        if (!isDupSchedule) {
+          group.jadwals.push({ hari, jamMulai, jamSelesai, ruangan });
+        }
+      }
+
+      // Ekstrak info mahasiswa
+      const nim = String(row.nim || row.student_id || "").trim();
+      const studentName = String(
+        row.nama_mahasiswa ||
+          row.nama_mhs ||
+          row.namamahasiswa ||
+          row.name ||
+          row.nama ||
+          ""
+      ).trim();
+      const email = row.email ? String(row.email).trim().toLowerCase() : null;
+      const jurusan = String(row.jurusan || row.prodi || "").trim();
+      const semester = parseInt(row.semester) || 1;
+
+      if (nim) {
+        const isDupStudent = group.students.some((s) => s.nim === nim);
+        if (!isDupStudent) {
+          group.students.push({ nim, name: studentName, email, jurusan, semester });
+        }
+      }
+    }
+
+    if (classGroups.size === 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Tidak ditemukan data kelas yang valid pada CSV. Pastikan terdapat kolom 'kode_kelas'.",
+      });
+    }
+
+    const summary = {
+      totalRows: rawRows.length,
+      classesProcessed: classGroups.size,
+      classesCreated: 0,
+      classesUpdated: 0,
+      schedulesCreated: 0,
+      studentsCreated: 0,
+      studentsUpdated: 0,
+      studentsEnrolled: 0,
+      alreadyEnrolled: 0,
+      errors: [],
+    };
+
+    // 2. Proses tiap grup kelas
+    for (const [kodeKelas, group] of classGroups.entries()) {
+      let kelas = await prisma.kelas.findUnique({
+        where: { kode: kodeKelas },
+      });
+
+      if (kelas) {
+        // Cek kepemilikan kelas jika bukan admin
+        if (req.user.role !== "ADMIN" && kelas.dosenId !== targetDosenId) {
+          summary.errors.push({
+            kode: kodeKelas,
+            reason: `Kelas dengan kode '${kodeKelas}' sudah ada dan diampu oleh dosen lain.`,
+            type: "FORBIDDEN_CLASS",
+          });
+          continue;
+        }
+
+        // Update nama/deskripsi kelas jika ada perubahan
+        kelas = await prisma.kelas.update({
+          where: { id: kelas.id },
+          data: {
+            nama: group.nama || kelas.nama,
+            ...(group.deskripsi ? { deskripsi: group.deskripsi } : {}),
+          },
+        });
+        summary.classesUpdated++;
+      } else {
+        // Buat kelas baru untuk dosen pengunggah
+        kelas = await prisma.kelas.create({
+          data: {
+            kode: kodeKelas,
+            nama: group.nama,
+            deskripsi: group.deskripsi,
+            dosenId: targetDosenId,
+          },
+        });
+        summary.classesCreated++;
+      }
+
+      // 3. Proses Jadwal Kelas dengan Validasi Bentrok (Anti-Nabrak)
+      for (const j of group.jadwals) {
+        const conflictCheck = await checkScheduleConflict(prisma, {
+          dosenId: targetDosenId,
+          hari: j.hari,
+          jamMulai: j.jamMulai,
+          jamSelesai: j.jamSelesai,
+          ruangan: j.ruangan,
+          excludeKelasId: kelas.id,
+        });
+
+        if (conflictCheck.hasConflict) {
+          summary.errors.push({
+            kode: kodeKelas,
+            jadwal: `${j.hari} ${j.jamMulai}-${j.jamSelesai} (${j.ruangan || "Tanpa Ruang"})`,
+            reason: conflictCheck.reason,
+            type: conflictCheck.type,
+          });
+          continue;
+        }
+
+        // Cek apakah jadwal yang sama persis sudah ada di kelas ini
+        const existingJadwal = await prisma.jadwalKelas.findFirst({
+          where: {
+            kelasId: kelas.id,
+            hari: conflictCheck.normalizedHari,
+            jamMulai: conflictCheck.normalizedJamMulai,
+            jamSelesai: conflictCheck.normalizedJamSelesai,
+          },
+        });
+
+        if (!existingJadwal) {
+          await prisma.jadwalKelas.create({
+            data: {
+              kelasId: kelas.id,
+              hari: conflictCheck.normalizedHari,
+              jamMulai: conflictCheck.normalizedJamMulai,
+              jamSelesai: conflictCheck.normalizedJamSelesai,
+              ruangan: conflictCheck.normalizedRuangan,
+            },
+          });
+          summary.schedulesCreated++;
+        }
+      }
+
+      // 4. Proses Daftar Mahasiswa & Enrollment ke Kelas
+      for (const s of group.students) {
+        try {
+          let mhs = await prisma.mahasiswa.findUnique({
+            where: { nim: s.nim },
+          });
+
+          if (!mhs) {
+            mhs = await prisma.mahasiswa.create({
+              data: {
+                nim: s.nim,
+                name: s.name || `Mahasiswa ${s.nim}`,
+                email: s.email || null,
+                jurusan: s.jurusan || "Umum",
+                semester: s.semester || 1,
+                password: "",
+              },
+            });
+            summary.studentsCreated++;
+          } else {
+            await prisma.mahasiswa.update({
+              where: { nim: s.nim },
+              data: {
+                ...(s.name ? { name: s.name } : {}),
+                ...(s.jurusan ? { jurusan: s.jurusan } : {}),
+                ...(s.semester ? { semester: s.semester } : {}),
+                ...(s.email && s.email !== mhs.email ? { email: s.email } : {}),
+              },
+            });
+            summary.studentsUpdated++;
+          }
+
+          // Daftarkan ke kelas_mahasiswa
+          const enrollment = await prisma.kelasMahasiswa.findUnique({
+            where: {
+              kelasId_mahasiswaId: {
+                kelasId: kelas.id,
+                mahasiswaId: mhs.id,
+              },
+            },
+          });
+
+          if (!enrollment) {
+            await prisma.kelasMahasiswa.create({
+              data: {
+                kelasId: kelas.id,
+                mahasiswaId: mhs.id,
+              },
+            });
+            summary.studentsEnrolled++;
+          } else {
+            summary.alreadyEnrolled++;
+          }
+        } catch (studentErr) {
+          summary.errors.push({
+            kode: kodeKelas,
+            nim: s.nim,
+            reason: "Gagal memproses mahasiswa: " + studentErr.message,
+          });
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Import CSV berhasil. ${summary.classesCreated} kelas dibuat, ${summary.classesUpdated} kelas diperbarui, ${summary.schedulesCreated} jadwal ditambahkan, ${summary.studentsEnrolled} mahasiswa didaftarkan.`,
+      data: summary,
+    });
+  } catch (err) {
+    console.error("[KELAS] POST /import-csv error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Gagal memproses file CSV: " + err.message,
+    });
+  }
+});
+
 // ─── POST /api/kelas ──────────────────────────────────────────────────────────
 // Dosen membuat kelas baru
 router.post(
@@ -424,16 +740,34 @@ router.post(
     const { hari, jamMulai, jamSelesai, ruangan } = req.body;
 
     try {
-      const { error } = await checkKelasAccess(id, req.user);
+      const { error, kelas } = await checkKelasAccess(id, req.user);
       if (error) return res.status(error.status).json({ success: false, message: error.message });
+
+      // Validasi bentrok jadwal (Dosen & Ruangan)
+      const conflictCheck = await checkScheduleConflict(prisma, {
+        dosenId: kelas.dosenId,
+        hari,
+        jamMulai,
+        jamSelesai,
+        ruangan,
+        excludeKelasId: id,
+      });
+
+      if (conflictCheck.hasConflict) {
+        return res.status(409).json({
+          success: false,
+          message: conflictCheck.reason,
+          type: conflictCheck.type,
+        });
+      }
 
       const newJadwal = await prisma.jadwalKelas.create({
         data: {
           kelasId: id,
-          hari,
-          jamMulai,
-          jamSelesai,
-          ruangan: ruangan || null,
+          hari: conflictCheck.normalizedHari,
+          jamMulai: conflictCheck.normalizedJamMulai,
+          jamSelesai: conflictCheck.normalizedJamSelesai,
+          ruangan: conflictCheck.normalizedRuangan,
         },
       });
 

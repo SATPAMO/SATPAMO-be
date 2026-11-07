@@ -124,6 +124,101 @@ router.get("/", async (req, res) => {
   }
 });
 
+// ─── GET /api/mahasiswa/me/jadwal ─────────────────────────────────────────────
+// Mengambil jadwal perkuliahan khusus untuk mahasiswa yang sedang login
+router.get("/me/jadwal", async (req, res) => {
+  if (req.user.role !== "MAHASISWA") {
+    return res.status(403).json({
+      success: false,
+      message: "Endpoint ini khusus untuk akun mahasiswa yang login.",
+    });
+  }
+
+  try {
+    const enrollments = await prisma.kelasMahasiswa.findMany({
+      where: { mahasiswaId: req.user.id },
+      include: {
+        kelas: {
+          include: {
+            dosen: { select: { id: true, username: true, email: true } },
+            jadwals: { orderBy: { hari: "asc" } },
+          },
+        },
+      },
+    });
+
+    const jadwals = [];
+    for (const e of enrollments) {
+      for (const j of e.kelas.jadwals) {
+        jadwals.push({
+          jadwalId: j.id,
+          kelasId: e.kelas.id,
+          kodeKelas: e.kelas.kode,
+          namaKelas: e.kelas.nama,
+          dosen: e.kelas.dosen ? e.kelas.dosen.username : null,
+          hari: j.hari,
+          jamMulai: j.jamMulai,
+          jamSelesai: j.jamSelesai,
+          ruangan: j.ruangan,
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: jadwals,
+      totalKelas: enrollments.length,
+      totalJadwal: jadwals.length,
+    });
+  } catch (err) {
+    console.error("[MAHASISWA] GET /me/jadwal error:", err);
+    return res.status(500).json({ success: false, message: "Gagal memuat jadwal: " + err.message });
+  }
+});
+
+// ─── GET /api/mahasiswa/me/kelas ──────────────────────────────────────────────
+// Mengambil daftar kelas yang diikuti oleh mahasiswa yang sedang login
+router.get("/me/kelas", async (req, res) => {
+  if (req.user.role !== "MAHASISWA") {
+    return res.status(403).json({
+      success: false,
+      message: "Endpoint ini khusus untuk akun mahasiswa yang login.",
+    });
+  }
+
+  try {
+    const enrollments = await prisma.kelasMahasiswa.findMany({
+      where: { mahasiswaId: req.user.id },
+      include: {
+        kelas: {
+          include: {
+            dosen: { select: { id: true, username: true, email: true } },
+            jadwals: true,
+            _count: { select: { mahasiswas: true } },
+          },
+        },
+      },
+      orderBy: { enrolledAt: "desc" },
+    });
+
+    const classes = enrollments.map((e) => ({
+      id: e.kelas.id,
+      kode: e.kelas.kode,
+      nama: e.kelas.nama,
+      deskripsi: e.kelas.deskripsi,
+      dosen: e.kelas.dosen,
+      jadwals: e.kelas.jadwals,
+      totalMahasiswa: e.kelas._count.mahasiswas,
+      enrolledAt: e.enrolledAt,
+    }));
+
+    return res.json({ success: true, data: classes, total: classes.length });
+  } catch (err) {
+    console.error("[MAHASISWA] GET /me/kelas error:", err);
+    return res.status(500).json({ success: false, message: "Gagal memuat kelas: " + err.message });
+  }
+});
+
 // ─── GET /api/mahasiswa/:id ───────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   try {
