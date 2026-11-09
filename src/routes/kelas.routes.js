@@ -1,8 +1,10 @@
 const express = require("express");
 const multer = require("multer");
+const jwt = require("jsonwebtoken");
 const { body, param, validationResult } = require("express-validator");
 const prisma = require("../lib/prisma");
 const { authenticate } = require("../middleware/auth");
+const { sendActivationEmail } = require("../services/email.service");
 const {
   VALID_HARI,
   parseCsvString,
@@ -382,6 +384,10 @@ router.post(["/import-csv", "/import-file"], upload.single("file"), async (req, 
       });
     }
 
+    const shouldBlastEmail =
+      req.body.sendActivationEmail === "true" ||
+      req.body.sendActivationEmail === true;
+
     const summary = {
       totalRows: rawRows.length,
       classesProcessed: classGroups.size,
@@ -392,6 +398,7 @@ router.post(["/import-csv", "/import-file"], upload.single("file"), async (req, 
       studentsUpdated: 0,
       studentsEnrolled: 0,
       alreadyEnrolled: 0,
+      emailsSent: 0,
       errors: [],
     };
 
@@ -532,6 +539,42 @@ router.post(["/import-csv", "/import-file"], upload.single("file"), async (req, 
           } else {
             summary.alreadyEnrolled++;
           }
+
+          // Kirim email aktivasi jika opsi blast email aktif dan akun belum memiliki password
+          if (
+            shouldBlastEmail &&
+            mhs.email &&
+            (!mhs.password || mhs.password.trim() === "")
+          ) {
+            try {
+              const activationToken = jwt.sign(
+                {
+                  type: "ACCOUNT_ACTIVATION",
+                  mahasiswaId: mhs.id,
+                  nim: mhs.nim,
+                  email: mhs.email,
+                },
+                process.env.JWT_SECRET,
+                { expiresIn: "24h" }
+              );
+              const clientUrl =
+                process.env.CLIENT_APP_URL || "http://localhost:5173";
+              const activationUrl = `${clientUrl}/aktivasi?token=${activationToken}`;
+
+              await sendActivationEmail({
+                to: mhs.email,
+                name: mhs.name,
+                nim: mhs.nim,
+                activationUrl,
+              });
+              summary.emailsSent++;
+            } catch (mailErr) {
+              console.warn(
+                `[KELAS] Gagal mengirim email aktivasi ke ${mhs.email}:`,
+                mailErr.message
+              );
+            }
+          }
         } catch (studentErr) {
           summary.errors.push({
             kode: kodeKelas,
@@ -544,7 +587,7 @@ router.post(["/import-csv", "/import-file"], upload.single("file"), async (req, 
 
     return res.json({
       success: true,
-      message: `Import CSV berhasil. ${summary.classesCreated} kelas dibuat, ${summary.classesUpdated} kelas diperbarui, ${summary.schedulesCreated} jadwal ditambahkan, ${summary.studentsEnrolled} mahasiswa didaftarkan.`,
+      message: `Import file berhasil. ${summary.classesCreated} kelas dibuat, ${summary.classesUpdated} kelas diperbarui, ${summary.schedulesCreated} jadwal ditambahkan, ${summary.studentsEnrolled} mahasiswa didaftarkan${summary.emailsSent > 0 ? `, dan ${summary.emailsSent} email aktivasi dikirim` : ""}.`,
       data: summary,
     });
   } catch (err) {
