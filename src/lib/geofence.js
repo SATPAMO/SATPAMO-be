@@ -1,6 +1,7 @@
 /**
  * geofence.js
- * Utility untuk validasi geofencing lokasi presensi menggunakan rumus Haversine.
+ * Utility untuk validasi geofencing lokasi presensi dinamis.
+ * Lokasi dan radius dikontrol langsung dari web dashboard dosen secara real-time.
  */
 
 // Radius bumi dalam meter
@@ -34,30 +35,97 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return Math.round(EARTH_RADIUS_METERS * c * 10) / 10; // Bulatkan ke 1 desimal
 }
 
+// In-memory store untuk sesi geofence aktif yang dikontrol dari web dosen
+const activeGeofences = new Map();
+
+// Default: Geofence harus diaktifkan dari web dosen (default radius 100m)
+const defaultSession = {
+  isActive: true, // Default aktif saat server berjalan, namun dapat diaktifkan/dinonaktifkan oleh dosen
+  latitude: parseFloat(process.env.CAMPUS_LATITUDE || "-6.89042"),
+  longitude: parseFloat(process.env.CAMPUS_LONGITUDE || "107.61031"),
+  radius: 100, // Default 100 meter
+  ruangan: "Ruang 207",
+  kelasId: "global",
+  updatedAt: new Date().toISOString(),
+};
+activeGeofences.set("global", { ...defaultSession });
+
 /**
- * Memvalidasi apakah koordinat mahasiswa berada di dalam radius kampus.
+ * Mengambil status geofence aktif untuk kelas atau global.
+ */
+function getActiveGeofence(kelasId) {
+  if (kelasId && activeGeofences.has(kelasId)) {
+    return activeGeofences.get(kelasId);
+  }
+  return activeGeofences.get("global") || { ...defaultSession };
+}
+
+/**
+ * Mengatur status aktif/nonaktif dan radius geofence dari web dosen.
+ */
+function setActiveGeofence({ kelasId = "global", isActive, latitude, longitude, radius, ruangan }) {
+  const existing = getActiveGeofence(kelasId);
+  const updated = {
+    ...existing,
+    ...(isActive !== undefined && { isActive: Boolean(isActive) }),
+    ...(latitude !== undefined && !isNaN(parseFloat(latitude)) && { latitude: parseFloat(latitude) }),
+    ...(longitude !== undefined && !isNaN(parseFloat(longitude)) && { longitude: parseFloat(longitude) }),
+    ...(radius !== undefined && !isNaN(parseFloat(radius)) && { radius: parseFloat(radius) }),
+    ...(ruangan !== undefined && { ruangan: String(ruangan) }),
+    kelasId: kelasId || "global",
+    updatedAt: new Date().toISOString(),
+  };
+
+  const targetKey = kelasId || "global";
+  activeGeofences.set(targetKey, updated);
+  activeGeofences.set("global", updated); // sync global fallback
+
+  return updated;
+}
+
+/**
+ * Memvalidasi apakah koordinat mahasiswa berada di dalam radius geofence yang aktif dari web dosen.
  * @param {number} lat - Latitude mahasiswa
  * @param {number} lon - Longitude mahasiswa
- * @returns {{ distance: number, isValid: boolean, campusLat: number, campusLon: number, maxRadius: number }}
+ * @param {string} [kelasId] - ID kelas terkait
  */
-function validateLocation(lat, lon) {
-  const campusLat = parseFloat(process.env.CAMPUS_LATITUDE || "-7.968792");
-  const campusLon = parseFloat(process.env.CAMPUS_LONGITUDE || "112.592575");
-  const maxRadius = parseFloat(process.env.CAMPUS_MAX_RADIUS_METERS || "200");
+function validateLocation(lat, lon, kelasId = "global") {
+  const session = getActiveGeofence(kelasId);
 
-  const distance = calculateDistance(lat, lon, campusLat, campusLon);
-  const isValid = distance <= maxRadius;
+  // Jika geofence belum dinyalakan dari web dosen
+  if (!session.isActive) {
+    return {
+      isSessionActive: false,
+      isValid: false,
+      distance: 0,
+      centerLat: session.latitude,
+      centerLon: session.longitude,
+      maxRadius: session.radius,
+      ruangan: session.ruangan,
+      reason: "Area geofence presensi belum diaktifkan oleh dosen di web dashboard.",
+    };
+  }
+
+  const distance = calculateDistance(lat, lon, session.latitude, session.longitude);
+  const isValid = distance <= session.radius;
 
   return {
-    distance,
+    isSessionActive: true,
     isValid,
-    campusLat,
-    campusLon,
-    maxRadius,
+    distance,
+    centerLat: session.latitude,
+    centerLon: session.longitude,
+    maxRadius: session.radius,
+    ruangan: session.ruangan,
+    reason: isValid
+      ? `Valid (dalam radius ${session.radius}m dari ${session.ruangan})`
+      : `Di luar radius geofence (${distance}m dari ${session.ruangan}, batas toleransi dosen ${session.radius}m)`,
   };
 }
 
 module.exports = {
   calculateDistance,
+  getActiveGeofence,
+  setActiveGeofence,
   validateLocation,
 };

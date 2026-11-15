@@ -1276,6 +1276,7 @@ router.get("/:id/attendance", async (req, res) => {
         longitude: att ? att.longitude : null,
         distance: att ? att.distance : null,
         isLocationValid: att ? att.isLocationValid : false,
+        aiVerification: att ? att.aiVerification : null,
         pertemuanKe: att?.pertemuanKe ?? targetPertemuan ?? 1,
       };
     });

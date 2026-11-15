@@ -5,10 +5,43 @@ const { authenticate } = require("../middleware/auth");
 
 const router = express.Router();
 
-const { validateLocation } = require("../lib/geofence");
+const { validateLocation, getActiveGeofence, setActiveGeofence } = require("../lib/geofence");
 const { verifySelfieWithGemini } = require("../services/gemini.service");
 
-// â”€â”€â”€ POST /api/attendance/check-in â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── GET /api/attendance/session/geofence ─────────────────────────────────
+// Mengambil status geofence aktif yang disetel dosen (Public / Mahasiswa & Dosen)
+router.get("/session/geofence", (req, res) => {
+  const { kelasId } = req.query;
+  const session = getActiveGeofence(kelasId);
+  return res.json({
+    success: true,
+    data: session,
+  });
+});
+
+// ─── POST /api/attendance/session/geofence ────────────────────────────────
+// Mengatur switch aktif/nonaktif dan radius geofence dari web dosen
+router.post("/session/geofence", (req, res) => {
+  const { kelasId, isActive, radius, latitude, longitude, ruangan } = req.body;
+  const updated = setActiveGeofence({
+    kelasId,
+    isActive,
+    radius,
+    latitude,
+    longitude,
+    ruangan,
+  });
+
+  return res.json({
+    success: true,
+    message: updated.isActive
+      ? `Area geofence DIAKTIFKAN dengan radius ${updated.radius}m (${updated.ruangan || "ruang kelas"}). Mahasiswa dapat presensi.`
+      : "Area geofence DINONAKTIFKAN. Mahasiswa tidak dapat presensi.",
+    data: updated,
+  });
+});
+
+// ─── POST /api/attendance/check-in ────────────────────────────────────────
 // Presensi mandiri mahasiswa dengan Selfie + Lokasi GPS (Publik, tanpa wajib login Dosen)
 const checkInValidation = [
   body("mahasiswaId").notEmpty().withMessage("mahasiswaId wajib diisi"),
@@ -46,8 +79,26 @@ router.post("/check-in", checkInValidation, async (req, res) => {
     const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(now);
     const todayDate = new Date(`${dateStr}T00:00:00.000Z`);
 
-    // 3. Validasi Lokasi (Geofencing Kampus)
-    const geoResult = validateLocation(parseFloat(latitude), parseFloat(longitude));
+    // 3. Validasi Lokasi Dinamis (Geofencing Aktif dari Web Dosen)
+    const geoResult = validateLocation(parseFloat(latitude), parseFloat(longitude), kelasId);
+
+    // Jika dosen belum mengaktifkan area geofence di web
+    if (!geoResult.isSessionActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Presensi ditolak: Sesi presensi atau area geofence belum diaktifkan oleh dosen di web.",
+        details: geoResult,
+      });
+    }
+
+    // Jika mahasiswa di luar radius geofence yang ditentukan dosen (misal > 100m)
+    if (!geoResult.isValid) {
+      return res.status(403).json({
+        success: false,
+        message: `Presensi ditolak: Anda berada di luar area geofence (${geoResult.distance}m). Batas toleransi adalah ${geoResult.maxRadius}m dari ${geoResult.ruangan || "ruang kelas"}.`,
+        details: geoResult,
+      });
+    }
 
     // 4. Verifikasi Foto Selfie dengan Gemini AI Vision
     const aiResult = await verifySelfieWithGemini(photo);
@@ -217,7 +268,7 @@ router.get("/stats", async (req, res) => {
 // ─── GET /api/attendance ───────────────────────────────────────────────────────
 // Query: ?date=2026-09-07&startDate=...&endDate=...&status=PRESENT&search=budi&kelasId=...
 router.get("/", async (req, res) => {
-  const { date, startDate, endDate, status, search, kelasId, page = 1, limit = 50 } = req.query;
+  const { date, startDate, endDate, status, search, kelasId, all, page = 1, limit = 50 } = req.query;
 
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -228,7 +279,10 @@ router.get("/", async (req, res) => {
 
   // Build date filter (timezone-aware WIB)
   let dateFilter = {};
-  if (date && date !== "undefined") {
+  if (all === "true" || all === true) {
+    // Ambil semua data tanpa filter tanggal (untuk riwayat kehadiran dosen / statistik)
+    dateFilter = {};
+  } else if (date && date !== "undefined") {
     dateFilter = { date: new Date(`${date}T00:00:00.000Z`) };
   } else if (startDate && endDate && startDate !== "undefined" && endDate !== "undefined") {
     dateFilter = {
