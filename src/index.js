@@ -8,6 +8,7 @@ const mahasiswaRoutes  = require("./routes/mahasiswa.routes");
 const attendanceRoutes = require("./routes/attendance.routes");
 const aiRoutes         = require("./routes/ai.routes");
 const kelasRoutes      = require("./routes/kelas.routes");
+const faceRoutes       = require("./routes/face.routes");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -42,6 +43,7 @@ app.use("/api/mahasiswa",  mahasiswaRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/ai",         aiRoutes);
 app.use("/api/kelas",      kelasRoutes);
+app.use("/api/face",       faceRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => {

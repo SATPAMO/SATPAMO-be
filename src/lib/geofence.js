@@ -92,17 +92,19 @@ function setActiveGeofence({ kelasId = "global", isActive, latitude, longitude, 
 function validateLocation(lat, lon, kelasId = "global") {
   const session = getActiveGeofence(kelasId);
 
-  // Jika geofence belum dinyalakan dari web dosen
+  // Jika geofence dinonaktifkan oleh dosen -> Mode Bebas Lokasi (mahasiswa diizinkan absen dari mana saja)
   if (!session.isActive) {
+    const distance = calculateDistance(lat, lon, session.latitude, session.longitude);
     return {
-      isSessionActive: false,
-      isValid: false,
-      distance: 0,
+      isSessionActive: true,
+      isGeofenceActive: false,
+      isValid: true,
+      distance,
       centerLat: session.latitude,
       centerLon: session.longitude,
       maxRadius: session.radius,
       ruangan: session.ruangan,
-      reason: "Area geofence presensi belum diaktifkan oleh dosen di web dashboard.",
+      reason: "Bebas Lokasi: Area geofence dinonaktifkan oleh dosen. Presensi dapat dilakukan dari mana saja.",
     };
   }
 
@@ -111,6 +113,7 @@ function validateLocation(lat, lon, kelasId = "global") {
 
   return {
     isSessionActive: true,
+    isGeofenceActive: true,
     isValid,
     distance,
     centerLat: session.latitude,

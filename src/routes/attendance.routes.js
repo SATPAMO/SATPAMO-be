@@ -35,8 +35,8 @@ router.post("/session/geofence", (req, res) => {
   return res.json({
     success: true,
     message: updated.isActive
-      ? `Area geofence DIAKTIFKAN dengan radius ${updated.radius}m (${updated.ruangan || "ruang kelas"}). Mahasiswa dapat presensi.`
-      : "Area geofence DINONAKTIFKAN. Mahasiswa tidak dapat presensi.",
+      ? `Area geofence DIAKTIFKAN dengan radius ${updated.radius}m (${updated.ruangan || "ruang kelas"}). Mahasiswa harus berada di dalam area.`
+      : "Area geofence DINONAKTIFKAN (Bebas Lokasi). Mahasiswa dapat presensi tanpa batasan jarak.",
     data: updated,
   });
 });
