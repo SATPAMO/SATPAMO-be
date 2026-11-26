@@ -1,72 +1,33 @@
-# AGENTS.md — AI Coding Instructions
+# AGENTS.md
 
-## 🤖 Persona & Role
+Node.js (CommonJS) Express backend (:3001) untuk SATPAMO Presensi. Database MySQL di port 3308 (`sama`), dikelola via Prisma ORM.
 
-You are an expert software engineer intimately familiar with this codebase.
+## Stack
+- Runtime: Node.js (CommonJS, `require`/`module.exports`).
+- Framework: Express 5.x (`express`, `express-validator`).
+- Database & ORM: MySQL 3308, Prisma 6.x (`@prisma/client`, `prisma`).
+- AI & Vision: Google Gemini API (`@google/genai` model `gemini-3.6-flash`).
+- Auth & Security: `bcryptjs`, `jsonwebtoken` (JWT).
+- Storage & Tools: `multer` (multipart/photo upload), `nodemailer` (SMTP aktivasi), `xlsx` (ekspor rekap).
+- Scripts: `npm run dev` (nodemon), `npm run lint` (node --check), `npm test` (native node test runner), `npm run db:push`, `npm run db:seed`.
+- Jangan tambah package baru tanpa konfirmasi eksplisit.
 
-- Maintain high-quality, production-ready, and idiomatic code.
-- Write modular, readable code and prefer explicit logic over implicit magic.
-- Adhere strictly to the project boundaries and technology stack defined below.
+## Struktur
+- `src/routes/`: Router endpoint REST API (`auth`, `attendance`, `kelas`, `mahasiswa`, `face`, `ai`).
+- `src/middleware/`: Auth JWT (`auth.js`), validation, multer upload.
+- `src/services/`: External services (`gemini.service.js` vision verification).
+- `src/lib/`: Shared helpers (`prisma.js`, `geofence.js`).
+- `prisma/`: `schema.prisma`, seed script (`prisma/seed.js`), migrasi.
+- `test/`: Native Node test suite (`node --test`).
 
-## 🛠️ Executable Commands & Dev Setup
+## Aturan Kerja
+- Gunakan CommonJS (`require`/`module.exports`), jangan gunakan ESM (`import`).
+- Format response JSON konsisten: `{ success: boolean, message?: string, data?: any }`.
+- HTTP status code: `200/201` sukses, `400` validasi, `401/403` auth/geofence, `404` not found, `500` server error.
+- Jangan hardcode secrets/credentials; baca dari `process.env`.
+- Fix hanya yang diminta, dilarang refactor file lain tanpa instruksi.
+- Jangan ubah schema database kecuali task memintanya.
+- Respons: 1-2 kalimat padat, direct to the point, tanpa penjelasan bertele-tele.
 
-Always use these exact package manager flags and script wrappers. Do not guess commands.
-
-- **Install Dependencies:** `npm install`
-- **Run Development Server:** `npm run dev`
-- **Run Linter:** `npm run lint`
-- **Run Formatter:** `npm run format`
-- **Execute Test Suite:** `npm test`
-- **Build Project:** `npm run build`
-
-_Agent Note: You must always run `npm run lint` and `npm test` before declaring a task complete or suggesting a commit._
-
-## 💻 Tech Stack & Architecture
-
-This repository uses the following core technologies. Do not introduce alternative frameworks or patterns.
-
-- **Language:** TypeScript (Strict mode enabled)
-- **Backend Framework:** Express.js
-- **Database / ORM:** Prisma with Mysql
-
-## 📁 Repository Structure & Conventions
-
-Understand the codebase layout before creating new files:
-
-- `/api`: API Routes
-- `/components`: Reusable UI components (keep them presentation-focused and client-side agnostic where possible).
-- `/lib`: Core business logic, database clients, and shared utility functions.
-- `/prisma`: Database schemas and migration files.
-
-### Coding Conventions:
-
-- All utility files must be written in JavaScript (`.js`).
-- Follow the Arrange-Act-Assert pattern for unit testing.
-
-## 🛡️ Guardrails & Boundaries
-
-Do not cross these operational guidelines under any circumstance:
-
-- **Security:** Never hardcode API keys, secrets, or credentials. Use `process.env` variables and ensure they are documented in `.env.example`.
-- **Scope Creep:** Fix only the problem requested. Do not refactor unrelated files or modules unless explicitly asked.
-- **Dependencies:** Do not install new third-party npm packages without asking for human confirmation. Rely on built-in node modules or already installed packages.
-- **Dependencies Layering:** Never import server-side utility functions (from `/lib/server`) inside client components.
-
-## 📝 Change Management & Validation
-
-Before finalizing any code modification:
-
-1. Review the generated code for redundant blocks or missing imports.
-2. Verify that your changes do not break existing types.
-3. Validate by executing the project linter and test commands listed in the Executable Commands section.
-4. Provide a brief explanation of _what_ was changed and _why_ it resolves the objective.
-
-<!-- antislop:start -->
-## antislop
-For UI, copy, people, mobile layout, or code comments work, load the antislop skill for the task:
-- Core filter, always on: `antislop`
-- UI / visual: `antislop-ui`
-- Code comments: `antislop-code`
-- People: `antislop-human`
-Before starting, ask the user when antislop applies: during the work, or after it is done.
-<!-- antislop:end -->
+## Verifikasi
+- Jalankan `npm run lint` dan/atau `npm test` sebelum selesai.
